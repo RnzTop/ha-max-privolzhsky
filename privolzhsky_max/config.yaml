@@ -1,0 +1,31 @@
+{
+  "name": "MAX — Техцентр Приволжский",
+  "version": "1.0.0",
+  "slug": "privolzhsky_max",
+  "description": "Меню техцентра, цены, контакты и переход к записи на сайте",
+  "arch": [
+    "aarch64"
+  ],
+  "startup": "application",
+  "boot": "auto",
+  "init": false,
+  "ports": {
+    "8080/tcp": null
+  },
+  "ports_description": {
+    "8080/tcp": "Webhook HTTP за вашим HTTPS reverse proxy (только /max/webhook)"
+  },
+  "options": {
+    "access_token": "",
+    "mode": "polling",
+    "webhook_url": "",
+    "webhook_secret": ""
+  },
+  "schema": {
+    "access_token": "password",
+    "mode": "list(polling|webhook)",
+    "webhook_url": "str",
+    "webhook_secret": "password"
+  },
+  "url": "https://github.com/RnzTop/ha-max-privolzhsky"
+}
