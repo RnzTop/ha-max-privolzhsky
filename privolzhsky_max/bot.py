@@ -12,23 +12,18 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import request, parse, error
+from booking import Booking
 
 LOG = logging.getLogger('privolzhsky')
 STOP = threading.Event()
-TYPES = ['bot_started', 'message_created', 'message_callback']
-SITE = 'https://xn--b1albmndh.xn--p1ai/'
+TYPES = ['bot_started', 'message_created', 'message_callback', 'bot_added']
 PHONE = '+7 (831) 414-66-99'
-LABELS = {'booking':'Записаться на ремонт','prices':'Услуги и цены','faq':'Частые вопросы','contacts':'Контакты'}
+LABELS = {'booking': 'Записаться на ремонт', 'contacts': 'Контакты'}
 TEXT = {
-'main': 'Здравствуйте! Это помощник техцентра «Приволжский» в Нижнем Новгороде. Здесь можно узнать об услугах и ценах, найти контакты и перейти к онлайн-записи на ремонт. Выберите нужный раздел.',
-'booking': f'Чтобы оставить заявку, откройте наш сайт и нажмите «Записаться онлайн». Заполните форму АвтоДилера и укажите желаемое время посещения. Заявка не означает подтверждение времени. Если нужна помощь с записью, позвоните: {PHONE}.',
-'prices': 'Ориентировочные цены:\n• Техническое обслуживание — от 3 000 ₽\n• Компьютерная диагностика — от 1 900 ₽\n• Ремонт подвески — от 500 ₽\n• Ремонт двигателя — от 5 000 ₽\nИтоговая стоимость зависит от автомобиля и объёма работ и согласовывается до их начала.',
-'faq': 'Выберите вопрос:',
-'warranty': 'Гарантия на работы — до 1 года. Условия и срок для вашей работы уточните у сотрудника техцентра.',
-'waiting': 'В техцентре есть зона ожидания для клиентов.',
-'company': f'Обслуживаем автопарки компаний и госучреждений. Условия обслуживания уточните по телефону: {PHONE}.',
-'contacts': f'Техцентр «Приволжский»\nНижний Новгород, Базовый проезд, 3\nТелефон: {PHONE}\nПн–чт: 09:00–18:00\nПт: 09:00–17:00\nСб и вс: выходные.',
-'unknown': f'Выберите раздел в меню ниже. По другим вопросам позвоните в техцентр: {PHONE}.'}
+    'main': 'Здравствуйте! Это помощник техцентра «Приволжский» в Нижнем Новгороде. Здесь можно оставить заявку на обратный звонок для записи на ремонт и найти наши контакты. Выберите нужный раздел.',
+    'booking': 'Оставьте заявку на обратный звонок через кнопку «Записаться на ремонт».',
+    'contacts': f'Техцентр «Приволжский»\nНижний Новгород, Базовый проезд, 3\nТелефон: {PHONE}\nПн–чт: 09:00–18:00\nПт: 09:00–17:00\nСб и вс: выходные.',
+    'unknown': f'Выберите раздел в меню ниже. По другим вопросам позвоните в техцентр: {PHONE}.'}
 
 def button(text, payload):
     return {'type':'callback','text':text,'payload':payload}
@@ -38,14 +33,10 @@ def page(key):
     rows=[]
     if key in ('main','unknown'):
         rows = [[button(label,k)] for k,label in LABELS.items()]
-    elif key == 'faq':
-        rows = [[button(t,k)] for k,t in [('warranty','Какая гарантия?'),('waiting','Есть ли зона ожидания?'),('company','Обслуживание организаций')]]
-    elif key in ('booking','prices'):
-        rows = [[{'type':'link','text':'Открыть сайт и записаться','url':SITE}]]
+    elif key == 'booking':
+        rows = [[button('Записаться на ремонт','booking')]]
     elif key == 'contacts':
         rows = [[{'type':'link','text':'Показать на карте','url':'https://yandex.ru/maps/org/1054778071/'}]]
-    if key in ('warranty','waiting','company'):
-        rows.append([button('Назад к вопросам','faq')])
     if key not in ('main','unknown'):
         rows.append([button('В главное меню','main')])
     return {'text':TEXT[key],'attachments':[{'type':'inline_keyboard','payload':{'buttons':rows}}]}
@@ -121,26 +112,31 @@ class Store:
         with self.connect() as db:
             db.execute('UPDATE inbox SET done=1,payload=NULL WHERE id=?',(key,))
 
-def worker(store,api):
-    delay=2
+def worker(store,api,options):
+    workflow = Booking(store, options, action)
     while not STOP.is_set():
-        row=store.next()
-        if row is None:
-            STOP.wait(.3); continue
-        try:
-            job=action(json.loads(row[1]))
-            if job: api.call('POST',job[0],job[1],job[2])
-            store.done(row[0]); delay=2
-            if job: LOG.info('Ответ обработан'); STOP.wait(.6)
-        except APIError as exc:
-            if exc.status in (400,403,404):
-                LOG.warning('Событие отклонено API, HTTP %s; пропущено',exc.status)
-                store.done(row[0])
-            else:
-                LOG.warning('API недоступен или отказ авторизации, HTTP %s; повтор через %s с',exc.status,delay)
-                STOP.wait(delay); delay=min(delay*2,60)
-        except (KeyError,TypeError,ValueError):
-            LOG.warning('Некорректное событие пропущено'); store.done(row[0])
+        row = store.next()
+        if row:
+            try:
+                workflow.plan(row)
+            except (KeyError, TypeError, ValueError):
+                LOG.warning('Некорректное событие пропущено'); store.done(row[0])
+        outgoing = workflow.next_job()
+        if outgoing:
+            if workflow.expired(outgoing):
+                workflow.fail(outgoing, 0)
+                continue
+            job = json.loads(outgoing[1])
+            try:
+                api.call('POST', job[0], job[1], job[2])
+                workflow.finish(outgoing)
+                LOG.info('Ответ обработан')
+            except APIError as exc:
+                workflow.fail(outgoing, exc.status)
+            STOP.wait(.6)
+        elif not row:
+            STOP.wait(.3)
+
 
 def handler(store,secret):
     class Handler(BaseHTTPRequestHandler):
@@ -169,6 +165,10 @@ def handler(store,secret):
 def validate(options):
     if not options.get('access_token','').strip(): raise ValueError('Введите access_token в настройках дополнения')
     if options.get('mode') not in ('polling','webhook'): raise ValueError('Неверный mode')
+    target=str(options.get('staff_chat_id','')).strip()
+    if target and (not re.fullmatch(r'-?[0-9]+',target) or not -(2**63) <= int(target) < 2**63 or int(target)==0):
+        raise ValueError('staff_chat_id должен быть числовым ID рабочего чата')
+    options['staff_chat_id']=target
     if options['mode']=='webhook':
         u=parse.urlsplit(options.get('webhook_url',''))
         if u.scheme!='https' or not u.hostname or u.port not in (None,443) or u.path!='/max/webhook' or u.query or u.fragment or u.username:
@@ -192,20 +192,29 @@ def main():
     # Retry startup read-only checks on network failures, never delete other subscriptions.
     while not STOP.is_set():
         try:
+            step = 'GET /me'
             api.call('GET','/me')
+            if options.get('staff_chat_id'):
+                step = 'GET рабочего чата'
+                staff = api.call('GET', '/chats/'+options['staff_chat_id'])
+                if staff.get('type') != 'chat' or staff.get('status') != 'active':
+                    LOG.error('staff_chat_id должен указывать на активную рабочую группу с добавленным ботом.'); return 1
+                LOG.info('Рабочая группа доступна боту')
+            step = 'GET /subscriptions'
             subscriptions=api.call('GET','/subscriptions').get('subscriptions',[])
             if options['mode']=='polling' and subscriptions:
                 LOG.error('Есть Webhook-подписка. Выберите webhook или удалите старую подписку осознанно в MAX.'); return 1
             if options['mode']=='webhook':
                 if any(s['url']!=options['webhook_url'] for s in subscriptions):
                     LOG.error('Обнаружена другая Webhook-подписка; запуск остановлен во избежание двойных ответов.'); return 1
+                step = 'POST /subscriptions'
                 api.call('POST','/subscriptions',body={'url':options['webhook_url'],'update_types':TYPES,'secret':options['webhook_secret']})
             break
         except APIError as exc:
-            LOG.warning('Проверка MAX не выполнена, HTTP %s. Повтор через 30 с',exc.status); STOP.wait(30)
+            LOG.warning('Проверка MAX: %s не выполнен, HTTP %s. Повтор через 30 с',step,exc.status); STOP.wait(30)
     if STOP.is_set(): return 0
-    threading.Thread(target=worker,args=(store,api),daemon=True).start()
-    LOG.info('Бот запущен: %s; только личные диалоги',options['mode'])
+    threading.Thread(target=worker,args=(store,api,options),daemon=True).start()
+    LOG.info('Бот запущен: %s; заявки %s',options['mode'], 'включены' if options.get('staff_chat_id') else 'ожидают настройки рабочего чата')
     if options['mode']=='polling':
         LOG.warning('Long Polling предназначен только для проверки. Для клиентов настройте Webhook.')
         while not STOP.is_set():

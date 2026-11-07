@@ -1,8 +1,8 @@
 {
   "name": "MAX — Техцентр Приволжский",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "slug": "privolzhsky_max",
-  "description": "Меню техцентра, цены, контакты и переход к записи на сайте",
+  "description": "Запись в MAX: имя из профиля, телефон и заявка в рабочий чат",
   "arch": [
     "aarch64"
   ],
@@ -19,13 +19,17 @@
     "access_token": "",
     "mode": "polling",
     "webhook_url": "",
-    "webhook_secret": ""
+    "webhook_secret": "",
+    "staff_chat_id": "",
+    "setup_mode": false
   },
   "schema": {
     "access_token": "password",
     "mode": "list(polling|webhook)",
     "webhook_url": "str",
-    "webhook_secret": "password"
+    "webhook_secret": "password",
+    "staff_chat_id": "str",
+    "setup_mode": "bool"
   },
   "url": "https://github.com/RnzTop/ha-max-privolzhsky"
 }

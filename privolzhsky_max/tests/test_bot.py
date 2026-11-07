@@ -6,7 +6,7 @@ class Tests(unittest.TestCase):
  def test_pages(self):
   for key in bot.TEXT:
    p=bot.page(key); self.assertTrue(p['text']); self.assertTrue(p['attachments'][0]['payload']['buttons'])
-  self.assertEqual(len(bot.page('main')['attachments'][0]['payload']['buttons']),4)
+  self.assertEqual(len(bot.page('main')['attachments'][0]['payload']['buttons']),2)
  def test_routing(self):
   self.assertEqual(bot.action({'update_type':'bot_started','chat_id':42})[1],{'chat_id':42})
   msg={'recipient':{'chat_type':'dialog','chat_id':42},'sender':{'is_bot':False},'body':{'text':'xxx'}}
