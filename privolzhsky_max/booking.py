@@ -40,8 +40,11 @@ def view(text, buttons=None):
 
 class Booking:
     def __init__(self, store, options, default_action):
+        import qr_bridge
+
         self.store, self.options, self.default_action = store, options, default_action
         with store.connect() as db:
+            qr_bridge.initialize(db)
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS sessions (
                     chat INTEGER PRIMARY KEY, nonce TEXT, name TEXT, phone TEXT, touched REAL);
@@ -76,6 +79,12 @@ class Booking:
         sender = sender or update.get('user') or {}
         if sender.get('is_bot'):
             return []
+        callback = update.get('callback') or {}
+        payload = callback.get('payload')
+        if kind == 'message_callback' and isinstance(payload, str) and payload.startswith('qr:claim:'):
+            from qr_bridge import claim
+
+            return claim(db, self.options, update, sender)
         # Setup logs only the numeric group ID, never its messages or membership.
         if kind == 'bot_started':
             db.execute('DELETE FROM sessions WHERE chat=?', (update.get('chat_id'),))
@@ -179,6 +188,8 @@ class Booking:
         for row in rows:
             job = json.loads(row[1])
             target = str(job[1].get('chat_id', 'callback:'+str(row[0])))
+            if row[2] == 'qr':
+                target = 'qr:' + target
             if target in blocked:
                 continue
             blocked.add(target)
@@ -191,6 +202,8 @@ class Booking:
 
     def finish(self, row):
         with self.store.connect() as db:
+            if row[2] == 'qr':
+                db.execute("UPDATE qr_events SET status='delivered' WHERE source_key=?", (row[3],))
             if row[2] == 'staff':
                 req = db.execute('SELECT chat FROM requests WHERE id=?', (row[3],)).fetchone()
                 if req:
@@ -208,6 +221,8 @@ class Booking:
             expired = req and time.time()-req[1] >= TTL
             if permanent or expired or self.expired(row):
                 LOG.warning('Отправка %s завершена без доставки, HTTP %s', row[2], status)
+                if row[2] == 'qr':
+                    db.execute("UPDATE qr_events SET status='failed' WHERE source_key=?", (row[3],))
                 if req:
                     db.execute("UPDATE requests SET status='failed' WHERE id=?", (row[3],))
                     self.add_job(db, 'failure:'+row[3], ('/messages', {'chat_id':req[0]}, view(
