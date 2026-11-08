@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import request, parse, error
 from booking import Booking
+import qr_bridge
 
 LOG = logging.getLogger('privolzhsky')
 STOP = threading.Event()
@@ -112,8 +113,8 @@ class Store:
         with self.connect() as db:
             db.execute('UPDATE inbox SET done=1,payload=NULL WHERE id=?',(key,))
 
-def worker(store,api,options):
-    workflow = Booking(store, options, action)
+def worker(store,api,options,workflow=None):
+    workflow = workflow or Booking(store, options, action)
     while not STOP.is_set():
         row = store.next()
         if row:
@@ -169,6 +170,10 @@ def validate(options):
     if target and (not re.fullmatch(r'-?[0-9]+',target) or not -(2**63) <= int(target) < 2**63 or int(target)==0):
         raise ValueError('staff_chat_id должен быть числовым ID рабочего чата')
     options['staff_chat_id']=target
+    bridge_secret = options.get('qr_bridge_secret', '')
+    if bridge_secret and (options['mode'] != 'polling' or not target
+                          or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', bridge_secret)):
+        raise ValueError('qr_bridge_secret требует polling, staff_chat_id и 32–128 символов A–Z, a–z, 0–9, _ или -')
     if options['mode']=='webhook':
         u=parse.urlsplit(options.get('webhook_url',''))
         if u.scheme!='https' or not u.hostname or u.port not in (None,443) or u.path!='/max/webhook' or u.query or u.fragment or u.username:
@@ -213,7 +218,11 @@ def main():
         except APIError as exc:
             LOG.warning('Проверка MAX: %s не выполнен, HTTP %s. Повтор через 30 с',step,exc.status); STOP.wait(30)
     if STOP.is_set(): return 0
-    threading.Thread(target=worker,args=(store,api,options),daemon=True).start()
+    workflow = Booking(store, options, action)
+    if options.get('qr_bridge_secret'):
+        server = ThreadingHTTPServer(('0.0.0.0', 8098), qr_bridge.handler(workflow, options['qr_bridge_secret']))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=worker,args=(store,api,options,workflow),daemon=True).start()
     LOG.info('Бот запущен: %s; заявки %s',options['mode'], 'включены' if options.get('staff_chat_id') else 'ожидают настройки рабочего чата')
     if options['mode']=='polling':
         LOG.warning('Long Polling предназначен только для проверки. Для клиентов настройте Webhook.')

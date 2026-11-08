@@ -21,6 +21,7 @@
     "webhook_url": "",
     "webhook_secret": "",
     "staff_chat_id": "",
+    "qr_bridge_secret": "",
     "setup_mode": false
   },
   "schema": {
@@ -29,6 +30,7 @@
     "webhook_url": "str",
     "webhook_secret": "password",
     "staff_chat_id": "str",
+    "qr_bridge_secret": "password",
     "setup_mode": "bool"
   },
   "url": "https://github.com/RnzTop/ha-max-privolzhsky"
